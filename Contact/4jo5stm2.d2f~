@@ -1,0 +1,120 @@
+using Contact.Data;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.ResponseCompression;
+using Microsoft.EntityFrameworkCore;
+using System.IO.Compression;
+using System.Threading.RateLimiting;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services to the container
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// Configure database context
+builder.Services.AddDbContext<ContactDbContext>(options =>
+    options.UseInMemoryDatabase("ContactDb"));
+
+// Configure CORS
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAngular",
+        policy => policy.WithOrigins("http://localhost:4200")
+                        .AllowAnyMethod()
+                        .AllowAnyHeader()
+                        .AllowCredentials());
+});
+
+// Add rate limiting
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("api", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: context.Connection.RemoteIpAddress?.ToString(),
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 10
+            }));
+});
+
+// Configure response compression
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<BrotliCompressionProvider>();
+    options.Providers.Add<GzipCompressionProvider>();
+});
+
+// Configure health checks
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<ContactDbContext>();
+
+var app = builder.Build();
+
+// Security headers middleware
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+    context.Response.Headers.Append("X-Frame-Options", "DENY");
+    context.Response.Headers.Append("X-XSS-Protection", "1; mode=block");
+    context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+    context.Response.Headers.Append("Permissions-Policy", "geolocation=(), microphone=()");
+    await next();
+});
+
+// Configure the HTTP request pipeline
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+    app.UseDeveloperExceptionPage();
+}
+else
+{
+    app.UseHsts();
+    app.UseResponseCompression();
+}
+
+// Global error handling
+app.UseExceptionHandler("/error");
+app.Map("/error", HandleError);
+
+// Security middleware
+app.UseHttpsRedirection();
+
+// Request logging
+app.UseHttpLogging();
+
+// Routing
+app.UseRouting();
+
+// CORS
+app.UseCors("AllowAngular");
+
+// Rate limiting
+app.UseRateLimiter();
+
+// Authentication/Authorization
+app.UseAuthorization();
+
+// Endpoints
+app.MapControllers();
+app.MapHealthChecks("/health");
+
+static IResult HandleError(HttpContext context)
+{
+    var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+    return Results.Problem(
+        title: "An error occurred",
+        detail: exception?.Message,
+        statusCode: StatusCodes.Status500InternalServerError
+    );
+}
+
+app.Run();

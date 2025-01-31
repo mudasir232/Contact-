@@ -1,0 +1,24 @@
+# ASP.NET Core
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.csproj.user
+.vs/
+appsettings.Development.json
+/nuget.config
+
+# Angular
+node_modules/
+dist/
+*.log
+.cache/
+.angular/
+
+# General
+.DS_Store
+.env
+*.exe
+*.dll
+*.pdb
+*.bak
